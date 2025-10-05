@@ -1,0 +1,12 @@
+beautifulsoup4
+requests
+apache-airflow-providers-apache-spark
+boto3
+pandas
+astro-run-dag 
+apache-airflow-providers-amazon
+minio
+pyspark
+elasticsearch
+streamlit
+pandas
