@@ -35,10 +35,12 @@ services:
     restart: always
     networks:
       - data
-  
+
+
 volumes:
   minio-data:
   es-data:
+  
   
 networks:
   data:

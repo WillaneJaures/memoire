@@ -6,8 +6,11 @@ import sqlite3
 from typing import Optional
 import plotly.express as px
 import os
-from typing import Optional
-import glob
+import docker
+import tarfile
+import io
+import boto3
+from botocore.exceptions import NoCredentialsError, PartialCredentialsError
 
 # ------------------- CONFIG -------------------
 ES_HOST = st.secrets.get("ES_HOST", "http://localhost:9200")
@@ -15,11 +18,42 @@ ES_USER = st.secrets.get("ES_USER", None)
 ES_PASS = st.secrets.get("ES_PASS", None)
 INDEX = "coinmarket-data"
 DB_PATH = "immobilier.db"
-CSV_PATH = "/tmp/coinmarket.csv"
+contenair_name = "memoire_5455b9-scheduler-1"
 PAGE_SIZE = 10
 
-# ------------------- ElasticSearch -------------------
+# Configuration MinIO
+MINIO_ENDPOINTS = [
+    'http://memoire_5455b9-minio-1:9000',
+    'http://172.18.0.2:9000'
+]
+MINIO_ACCESS_KEY = 'minio'
+MINIO_SECRET_KEY = 'minio123'
+MINIO_BUCKET = 'coinmarkettransform'
+MINIO_OBJECT = 'cleaned_data.csv'
 
+# Connexion Docker
+client = docker.from_env()
+
+# ------------------- MinIO -------------------
+def get_minio_client():
+    """Crée un client MinIO en essayant différents endpoints"""
+    for endpoint in MINIO_ENDPOINTS:
+        try:
+            s3_client = boto3.client(
+                's3',
+                endpoint_url=endpoint,
+                aws_access_key_id=MINIO_ACCESS_KEY,
+                aws_secret_access_key=MINIO_SECRET_KEY,
+                region_name='us-east-1'
+            )
+            # Test de connexion
+            s3_client.list_buckets()
+            return s3_client, endpoint
+        except Exception as e:
+            continue
+    return None, None
+
+# ------------------- ElasticSearch -------------------
 def build_es_client(host: Optional[str] = None) -> Elasticsearch:
     host = host or ES_HOST
     kwargs = {"hosts": [host]}
@@ -72,9 +106,10 @@ def search_es(es, query, page, page_size):
     hits = [h["_source"] for h in resp["hits"]["hits"]]
     return total, hits
 
-# ------------------- SQLite -------------------
 
+# ------------------- SQLite -------------------
 def init_database():
+    """Initialise la base SQLite si nécessaire"""
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     cursor.execute("""
@@ -93,52 +128,73 @@ def init_database():
     conn.commit()
     conn.close()
 
+
 def load_csv_to_sqlite():
     """
-    Charge automatiquement tous les fichiers CSV générés par PySpark
-    depuis le répertoire /tmp/cleaned_data.csv et les enregistre dans SQLite.
+    Récupère le fichier CSV transformé depuis le bucket MinIO coinmarkettransform,
+    le charge dans un DataFrame et le sauvegarde dans SQLite.
     """
-    folder_path = "/tmp/coinmarket.csv"
-
-    # Vérifie si le dossier existe
-    if not os.path.exists(folder_path):
-        return False, f"❌ Dossier introuvable : {folder_path}"
-
-    # Récupère tous les fichiers part-*.csv
-    csv_files = glob.glob(os.path.join(folder_path, "part-*.csv"))
-    if not csv_files:
-        return False, f"❌ Aucun fichier 'part-*.csv' trouvé dans {folder_path}"
-
-    st.info(f"📄 {len(csv_files)} fichier(s) CSV détecté(s). Chargement en cours...")
-
     try:
-        # Lecture et fusion des CSV
-        dfs = []
-        for file in csv_files:
-            df_part = pd.read_csv(file)
-            if not df_part.empty:
-                dfs.append(df_part)
-        if not dfs:
-            return False, "❌ Les fichiers CSV sont vides."
-        df = pd.concat(dfs, ignore_index=True)
+        # Connexion à MinIO
+        s3_client, endpoint = get_minio_client()
+        if s3_client is None:
+            return False, "❌ Impossible de se connecter à MinIO avec aucun des endpoints"
 
-        # Conversion et nettoyage optionnel
+        st.info(f"🔗 Connexion MinIO réussie avec: {endpoint}")
+
+        # Vérifier si le bucket existe
+        try:
+            s3_client.head_bucket(Bucket=MINIO_BUCKET)
+            st.info(f"✅ Bucket '{MINIO_BUCKET}' existe")
+        except Exception as e:
+            return False, f"❌ Bucket '{MINIO_BUCKET}' n'existe pas: {e}"
+
+        # Lister les objets dans le bucket
+        response = s3_client.list_objects_v2(Bucket=MINIO_BUCKET)
+        if 'Contents' in response:
+            st.info(f"📁 Objets dans le bucket '{MINIO_BUCKET}':")
+            for obj in response['Contents']:
+                st.info(f"   📄 {obj['Key']} (taille: {obj['Size']} bytes)")
+        else:
+            return False, f"⚠️ Aucun objet trouvé dans le bucket '{MINIO_BUCKET}'"
+
+        # Télécharger le fichier CSV depuis MinIO
+        st.info(f"⬇️ Téléchargement de {MINIO_OBJECT} depuis MinIO...")
+        
+        # Utiliser get_object pour récupérer le contenu directement
+        response = s3_client.get_object(Bucket=MINIO_BUCKET, Key=MINIO_OBJECT)
+        csv_content = response['Body'].read()
+        
+        # Lire le CSV directement depuis le contenu téléchargé
+        from io import StringIO
+        csv_string = csv_content.decode('utf-8')
+        df = pd.read_csv(StringIO(csv_string))
+        
+        st.info(f"✅ Fichier téléchargé et lu avec succès: {len(df)} lignes")
+
+        # Nettoyage des données
         if "price" in df.columns:
+            df["price"] = df["price"].astype(str).str.replace(r"[^\d.]", "", regex=True)
             df["price"] = pd.to_numeric(df["price"], errors="coerce")
 
-        # Enregistrement dans SQLite
+        # Nettoyage éventuel des NaN ou doublons
+        df.dropna(subset=["City", "category"], how="all", inplace=True)
+        df.drop_duplicates(inplace=True)
+
+        # Sauvegarde dans SQLite
         conn = sqlite3.connect(DB_PATH)
         df.to_sql("properties", conn, if_exists="replace", index=False)
         conn.commit()
         conn.close()
 
-        return True, f"✅ {len(df):,} lignes importées depuis {len(csv_files)} fichier(s) Spark vers SQLite."
+        return True, f"✅ {len(df):,} lignes importées depuis MinIO bucket '{MINIO_BUCKET}'"
 
     except Exception as e:
-        return False, f"❌ Erreur pendant le chargement : {e}"
-    
+        return False, f"❌ Erreur pendant le chargement depuis MinIO: {e}"
+
 
 def get_df_from_sqlite():
+    """Lit la table properties depuis SQLite"""
     conn = sqlite3.connect(DB_PATH)
     df = pd.read_sql("SELECT * FROM properties", conn)
     conn.close()
@@ -146,9 +202,8 @@ def get_df_from_sqlite():
 
 
 # ======================================================================
-# 🚀 INTERFACE STREAMLIT (2 onglets indépendants)
+# 🚀 INTERFACE STREAMLIT (2 onglets)
 # ======================================================================
-
 def main():
     st.set_page_config(page_title="CoinAfrique Analytics", layout="wide")
     st.title("🏠 CoinAfrique - Application complète")
@@ -156,7 +211,7 @@ def main():
     tab1, tab2 = st.tabs(["🔍 Moteur de recherche", "📊 Tableau de bord local"])
 
     # ======================================================
-    # 🔍 Onglet 1 : Recherche Elasticsearch
+    # 🔍 Onglet 1 : Elasticsearch (inchangé)
     # ======================================================
     with tab1:
         st.header("🔍 Recherche dans Elasticsearch")
@@ -187,12 +242,12 @@ def main():
                 st.error(f"Erreur de recherche : {e}")
 
     # ======================================================
-    # 📊 Onglet 2 : Dashboard basé sur CSV local
+    # 📊 Onglet 2 : Dashboard basé sur données MinIO
     # ======================================================
     with tab2:
-        st.header("📊 Tableau de bord (basé sur /tmp/cleaned_data.csv)")
+        st.header("📊 Tableau de bord (basé sur les données MinIO coinmarkettransform)")
 
-        if st.button("📥 Charger les données dans SQLite"):
+        if st.button("📥 Charger les données depuis MinIO dans SQLite"):
             init_database()
             success, msg = load_csv_to_sqlite()
             if success:
@@ -207,38 +262,47 @@ def main():
             return
 
         if df.empty:
-            st.info("⚠️ Aucune donnée trouvée. Clique sur le bouton pour charger le CSV.")
+            st.info("⚠️ Aucune donnée trouvée. Clique sur le bouton ci-dessus pour charger les données depuis MinIO.")
             return
 
         # ---- KPIs ----
+        prix_col = next((col for col in df.columns if "price" in col.lower()), None)
+        city_col = next((col for col in df.columns if "city" in col.lower()), None)
+
         col1, col2, col3 = st.columns(3)
         col1.metric("Total annonces", f"{len(df):,}")
-        col2.metric("Prix moyen", f"{df['price'].mean():,.0f} FCFA")
-        col3.metric("Nombre de villes", f"{df['City'].nunique()}")
+        #if prix_col:
+        #    prix_moyen = df[prix_col].mean(skipna=True)
+        #    col2.metric("Prix moyen", f"{prix_moyen:,.0f} FCFA")
+        #else:
+        #    col2.metric("Prix moyen", "N/A")
+
+        if city_col:
+            col3.metric("Nombre de villes", f"{df[city_col].nunique()}")
+        else:
+            col3.metric("Nombre de villes", "N/A")
 
         st.markdown("---")
 
         # ---- Graphiques ----
-        col1, col2 = st.columns(2)
-        with col1:
-            fig1 = px.histogram(df, x="price", nbins=30, title="Distribution des prix")
+        if prix_col:
+            fig1 = px.histogram(df, x=prix_col, nbins=30, title="Distribution des prix")
             st.plotly_chart(fig1, use_container_width=True)
-        with col2:
-            if "category" in df.columns:
-                fig2 = px.pie(df, names="category", title="Répartition Vente/Location")
-                st.plotly_chart(fig2, use_container_width=True)
 
-        if "City" in df.columns and "price" in df.columns:
-            fig3 = px.bar(
-                df.groupby("City")["price"].mean().sort_values(ascending=False).head(10),
-                title="Top 10 villes par prix moyen"
-            )
+        if "category" in df.columns:
+            fig2 = px.pie(df, names="category", title="Répartition Vente/Location")
+            st.plotly_chart(fig2, use_container_width=True)
+
+        if city_col and prix_col:
+            df_group = df.groupby(city_col)[prix_col].mean().sort_values(ascending=False).head(10)
+            fig3 = px.bar(df_group, title="Top 10 villes par prix moyen")
             st.plotly_chart(fig3, use_container_width=True)
 
         st.markdown("### 📋 Données brutes")
         st.dataframe(df, use_container_width=True)
         csv = df.to_csv(index=False).encode("utf-8")
         st.download_button("📤 Télécharger CSV", csv, "immobilier.csv", "text/csv")
+
 
 # ------------------- MAIN EXECUTION -------------------
 if __name__ == "__main__":

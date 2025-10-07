@@ -242,7 +242,7 @@ with DAG(
             raise Exception("❌ Impossible de se connecter à MinIO")
 
         bucket_name = 'coinmarkettransform'
-        file_path = '/tmp/cleaned_data.csv'
+        file_path = '/tmp/cleaned_data_single'
         object_name = 'cleaned_data.csv'
 
         if not os.path.exists(file_path):
@@ -312,7 +312,7 @@ with DAG(
             return True
         
         # Lire le fichier CSV nettoyé
-        file_path = '/tmp/cleaned_data.csv'
+        file_path = '/tmp/cleaned_data_single'
         
         # Vérifier si c'est un fichier ou un répertoire
         if os.path.isdir(file_path):
@@ -382,7 +382,7 @@ with DAG(
 
         es_hosts = [
             'http://memoire_5455b9-elasticsearch-1:9200',
-            'http://172.18.0.3:9200',
+            'http://172.18.0.2:9200',
             'http://elasticsearch:9200',
             'http://localhost:9200'
         ]
