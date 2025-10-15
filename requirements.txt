@@ -10,3 +10,5 @@ pyspark
 elasticsearch
 streamlit
 pandas
+scrapy
+selenium

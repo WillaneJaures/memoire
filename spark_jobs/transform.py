@@ -230,10 +230,17 @@ df25 = df24.withColumn(
 # ============================
 # 1️⃣1️⃣  CONVERSION FINALE
 # ============================
-df_clean = df25.withColumn("Nombre_de_piece", col("Nombre_de_piece").cast("int")) \
+df26 = df25.withColumn("Nombre_de_piece", col("Nombre_de_piece").cast("int")) \
     .withColumn("Nombre_de_salle_bain", col("Nombre_de_salle_bain").cast("int")) \
     .withColumn("Superficie", col("Superficie").cast("int")) \
     .withColumn("price", col("price").cast("int"))
+
+df27 = df26.withColumnRenamed("Nombre_de_piece", "nombre_chambres")
+
+#column to lowercase
+df_clean = df27.toDF(*[c.lower() for c in df27.columns])
+
+
 
 print("✅ Aperçu des données transformées :")
 df_clean.show(20, truncate=False)
