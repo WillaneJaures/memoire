@@ -28,6 +28,8 @@ if not os.path.exists(input_csv):
 print(f"✅ File {input_csv} found, size: {os.path.getsize(input_csv)} bytes")
 
 df = spark.read.csv(input_csv, header=True, inferSchema=True)
+df = df.toDF(*[col.lower() for col in df.columns])
+
 
 print("Aperçu des données brutes :")
 df.show(5, truncate=False)

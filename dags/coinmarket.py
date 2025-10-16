@@ -5,7 +5,6 @@ import os
 from datetime import datetime, timedelta
 import logging
 import time
-from elasticsearch import Elasticsearch
 
 
 # ----------------- Default Args -----------------
@@ -35,7 +34,7 @@ with DAG(
         import time
 
         df = pd.DataFrame()
-        for i in range(1, 5):  # Pages 1 à 4
+        for i in range(1, 5):  
             url = f'https://sn.coinafrique.com/categorie/immobilier?page={i}'
             logging.info(f"🔎 Scraping page {i}: {url}")
             res = get(url)
@@ -105,7 +104,7 @@ with DAG(
         class ExpatDakarSpider(scrapy.Spider):
             name = "expat_dakar"
             allowed_domains = ["expat-dakar.com"]
-            start_urls = [f"https://www.expat-dakar.com/appartements-a-louer?page={i}" for i in range(1, 5)]
+            start_urls = [f"https://www.expat-dakar.com/appartements-a-louer?page={i}" for i in range(1, 4)]
             handle_httpstatus_list = [403, 429]
             custom_settings = {
                 'LOG_ENABLED': False,
@@ -208,7 +207,7 @@ with DAG(
         # Essayer différentes méthodes de connexion
         endpoints_to_try = [
             'http://memoire_5455b9-minio-1:9000',
-            'http://172.18.0.2:9000'
+            'http://172.18.0.3:9000'
                    
         ]
         
@@ -336,7 +335,7 @@ with DAG(
 
         minio_urls = [
             'memoire_5455b9-minio-1:9000',
-            'http://172.18.0.2:9000'
+            'http://172.18.0.3:9000'
             
         ]
         
@@ -403,7 +402,7 @@ with DAG(
         
         endpoints_to_try = [
             'http://memoire_5455b9-minio-1:9000',
-            'http://172.18.0.2:9000'
+            'http://172.18.0.3:9000'
         ]
         s3_client = None
         for endpoint in endpoints_to_try:
@@ -446,7 +445,7 @@ with DAG(
         
         minio_urls = [
             'memoire_5455b9-minio-1:9000',
-            'http://172.18.0.2:9000'
+            'http://172.18.0.3:9000'
         ]
         s3_client = None
         for endpoint in minio_urls:
@@ -489,160 +488,17 @@ with DAG(
         except Exception as e:
             logging.error(f"❌ Erreur upload MinIO: {e}")
 
-    #--------------------------save to elasticsearch
-    @task
-    def upload_to_elasticsearch():
-        """Upload cleaned data to Elasticsearch"""
-        import pandas as pd
-        from elasticsearch import Elasticsearch
-        import json
-        
-        # Configuration Elasticsearch
-        es_hosts = [
-            'http://memoire_5455b9-elasticsearch-1:9200',
-            'http://172.18.0.4:9200'
-            
-        ]
-        
-        es_client = None
-        for host in es_hosts:
-            try:
-                logging.info(f"🔗 Tentative de connexion Elasticsearch: {host}")
-                es_client = Elasticsearch([host])
-                # Test de connexion
-                es_client.info()
-                logging.info(f"✅ Connexion Elasticsearch réussie: {host}")
-                break
-            except Exception as e:
-                logging.warning(f"❌ Échec connexion Elasticsearch {host}: {e}")
-                continue
-        
-        if es_client is None:
-            logging.warning("⚠️ Elasticsearch non disponible - cette étape est optionnelle")
-            logging.info("✅ Pipeline continue sans Elasticsearch")
-            return True
-        
-        # Lire le fichier CSV nettoyé
-        file_path = '/tmp/cleaned_data_single'
-        
-        # Vérifier si c'est un fichier ou un répertoire
-        if os.path.isdir(file_path):
-            csv_files = [f for f in os.listdir(file_path) if f.endswith('.csv')]
-            if csv_files:
-                actual_file = os.path.join(file_path, csv_files[0])
-                file_path = actual_file
-            else:
-                logging.error(f"❌ No CSV files found in directory {file_path}")
-                return False
-        
-        try:
-            # Lire le CSV
-            df = pd.read_csv(file_path)
-            logging.info(f"✅ Data read from {file_path}, shape: {df.shape}")
-            
-            # Configuration de l'index
-            index_name = 'coinmarket-data'
-            
-            # Créer l'index s'il n'existe pas
-            if not es_client.indices.exists(index=index_name):
-                mapping = {
-                    "mappings": {
-                        "properties": {
-                            "price": {"type": "text"},
-                            "type": {"type": "keyword"},
-                            "Nombre_de_piece": {"type": "text"},
-                            "Nombre_de_salle_bain": {"type": "text"},
-                            "Superficie": {"type": "text"},
-                            "category": {"type": "text"},
-                            "area": {"type": "keyword"},
-                            "city": {"type": "keyword"},
-                        }
-                    }
-                }
-                es_client.indices.create(index=index_name, body=mapping)
-                logging.info(f"✅ Index '{index_name}' created")
-            
-            # Upload des données
-            success_count = 0
-            for idx, row in df.iterrows():
-                try:
-                    doc = row.to_dict()
-                    # Nettoyer les valeurs NaN
-                    doc = {k: v for k, v in doc.items() if pd.notna(v)}
-                    
-                    es_client.index(
-                        index=index_name,
-                        id=idx,
-                        body=doc
-                    )
-                    success_count += 1
-                except Exception as e:
-                    logging.warning(f"⚠️ Error indexing document {idx}: {e}")
-            
-            logging.info(f"✅ Successfully indexed {success_count}/{len(df)} documents to Elasticsearch")
-            return True
-            
-        except Exception as e:
-            logging.warning(f"⚠️ Error uploading to Elasticsearch: {e}")
-            logging.info("✅ Pipeline continue malgré l'erreur Elasticsearch")
-            return True
 
     
-    
-
-
-
-
-    @task
-    def upload_join_to_elasticsearch():
-        import pandas as pd
-        from elasticsearch import Elasticsearch
-        import os
-        
-        es_hosts = [
-            'http://memoire_5455b9-elasticsearch-1:9200',
-            'http://172.18.0.4:9200'
-        ]
-        es_client = None
-        for host in es_hosts:
-            try:
-                logging.info(f"🔗 Tentative de connexion Elasticsearch: {host}")
-                es_client = Elasticsearch([host])
-                es_client.info()
-                logging.info(f"✅ Connexion Elasticsearch réussie: {host}")
-                break
-            except Exception as e:
-                logging.warning(f"❌ Échec connexion Elasticsearch {host}: {e}")
-                continue
-        if es_client is None:
-            logging.warning("⚠️ Elasticsearch non disponible - étape optionnelle")
-            return True
-        file_path = '/tmp/joined_cleaned_data_single'
-        if os.path.isdir(file_path):
-            csv_files = [f for f in os.listdir(file_path) if f.endswith('.csv')]
-            if csv_files:
-                file_path = os.path.join(file_path, csv_files[0])
-            else:
-                logging.error(f"❌ No CSV files found in directory {file_path}")
-                return False
-        df = pd.read_csv(file_path)
-        index_name = 'realestate-joined'
-        if not es_client.indices.exists(index=index_name):
-            es_client.indices.create(index=index_name)
-        for idx, row in df.iterrows():
-            doc = {k: v for k, v in row.to_dict().items() if pd.notna(v)}
-            es_client.index(index=index_name, id=idx, body=doc)
-        return True
-
     @task
     def upload_join_to_sqlite():
-        """Upload joined data to SQLite database"""
+        """Upload joined data to SQLite database - creates 'realestate' table"""
         import pandas as pd
         import sqlite3
         import os
         
         # Chemin vers la base de données SQLite
-        db_path = '/tmp/immobilier.db'
+        db_path = '/usr/local/airflow/immobilier.db'
         
         # Chemin vers les données jointes
         file_path = '/tmp/joined_cleaned_data_single'
@@ -664,25 +520,67 @@ with DAG(
             
             # Connexion à SQLite
             conn = sqlite3.connect(db_path)
+            cursor = conn.cursor()
             
-            # Nom de la table
-            table_name = 'realestate_joined'
+            # Créer la table 'realestate' avec le bon schéma
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS realestate (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    price INTEGER,
+                    type TEXT,
+                    superficie INTEGER,
+                    nombre_chambres INTEGER,
+                    nombre_sdb INTEGER,
+                    category TEXT,
+                    area TEXT,
+                    city TEXT,
+                    source TEXT
+                )
+            """)
             
-            # Créer la table si elle n'existe pas
-            df.to_sql(table_name, conn, if_exists='replace', index=False)
-            logging.info(f"✅ Table '{table_name}' created/updated in SQLite")
+            # Supprimer les données existantes et insérer les nouvelles
+            cursor.execute("DELETE FROM realestate")
+            
+            # Préparer les données pour l'insertion
+            df_clean = df.copy()
+            
+            # Nettoyer et convertir les types de données
+            if 'price' in df_clean.columns:
+                df_clean['price'] = pd.to_numeric(df_clean['price'], errors='coerce').fillna(0).astype(int)
+            if 'superficie' in df_clean.columns:
+                df_clean['superficie'] = pd.to_numeric(df_clean['superficie'], errors='coerce').fillna(0).astype(int)
+            if 'nombre_chambres' in df_clean.columns:
+                df_clean['nombre_chambres'] = pd.to_numeric(df_clean['nombre_chambres'], errors='coerce').fillna(0).astype(int)
+            if 'nombre_sdb' in df_clean.columns:
+                df_clean['nombre_sdb'] = pd.to_numeric(df_clean['nombre_sdb'], errors='coerce').fillna(0).astype(int)
+            
+            # Remplir les valeurs manquantes pour les colonnes texte
+            text_columns = ['type', 'category', 'area', 'city', 'source']
+            for col in text_columns:
+                if col in df_clean.columns:
+                    df_clean[col] = df_clean[col].fillna('Unknown')
+                else:
+                    df_clean[col] = 'Unknown'
+            
+            # Insérer les données
+            df_clean.to_sql('realestate', conn, if_exists='append', index=False)
             
             # Vérifier les données insérées
-            cursor = conn.cursor()
-            cursor.execute(f"SELECT COUNT(*) FROM {table_name}")
+            cursor.execute("SELECT COUNT(*) FROM realestate")
             count = cursor.fetchone()[0]
-            logging.info(f"✅ {count} records inserted into SQLite table '{table_name}'")
+            logging.info(f"✅ {count} records inserted into SQLite table 'realestate'")
             
             # Afficher un aperçu des données
-            cursor.execute(f"SELECT * FROM {table_name} LIMIT 5")
+            cursor.execute("SELECT * FROM realestate LIMIT 5")
             rows = cursor.fetchall()
             logging.info(f"✅ Preview of SQLite data: {len(rows)} rows shown")
             
+            # Afficher les colonnes de la table
+            cursor.execute("PRAGMA table_info(realestate)")
+            columns_info = cursor.fetchall()
+            logging.info(f"✅ Table 'realestate' schema: {[col[1] for col in columns_info]}")
+            
+            conn.commit()
             conn.close()
             return True
             
@@ -729,9 +627,8 @@ with DAG(
     # La jointure attend les deux uploads transformés
     [upload_coinmarket_transform, upload_expat_transform] >> join_job
 
-    # Phase 7 : Upload de la jointure sur Elasticsearch et SQLite en parallèle
-    upload_join_es = upload_join_to_elasticsearch()
+    # Phase 7 : Upload de la jointure sur SQLite
     upload_join_sqlite = upload_join_to_sqlite()
     
-    # Les deux uploads attendent la jointure
-    join_job >> [upload_join_es, upload_join_sqlite]
+    # L'upload SQLite attend la jointure
+    join_job >> upload_join_sqlite

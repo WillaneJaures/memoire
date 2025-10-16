@@ -12,3 +12,5 @@ airflow.db
 /.streamlit
 /.astro
 .dockerignore
+immobilier.db
+./immobilier.db

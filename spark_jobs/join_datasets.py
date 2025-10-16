@@ -29,6 +29,7 @@ print(f"Coinmarket cleaned CSV: {coinmarket_csv}")
 print(f"ExpatDakar cleaned CSV: {expat_csv}")
 
 df_coin = spark.read.csv(coinmarket_csv, header=True, inferSchema=True)
+
 df_expat = spark.read.csv(expat_csv, header=True, inferSchema=True)
 
 # Standardize schemas

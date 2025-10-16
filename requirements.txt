@@ -7,7 +7,6 @@ astro-run-dag
 apache-airflow-providers-amazon
 minio
 pyspark
-elasticsearch
 streamlit
 pandas
 scrapy
