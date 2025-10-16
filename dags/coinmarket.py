@@ -104,7 +104,7 @@ with DAG(
         class ExpatDakarSpider(scrapy.Spider):
             name = "expat_dakar"
             allowed_domains = ["expat-dakar.com"]
-            start_urls = [f"https://www.expat-dakar.com/appartements-a-louer?page={i}" for i in range(1, 4)]
+            start_urls = [f"https://www.expat-dakar.com/appartements-a-louer?page={i}" for i in range(1, 10)]
             handle_httpstatus_list = [403, 429]
             custom_settings = {
                 'LOG_ENABLED': False,
@@ -207,7 +207,7 @@ with DAG(
         # Essayer différentes méthodes de connexion
         endpoints_to_try = [
             'http://memoire_5455b9-minio-1:9000',
-            'http://172.18.0.3:9000'
+            'http://172.18.0.2:9000'
                    
         ]
         
@@ -335,7 +335,7 @@ with DAG(
 
         minio_urls = [
             'memoire_5455b9-minio-1:9000',
-            'http://172.18.0.3:9000'
+            'http://172.18.0.2:9000'
             
         ]
         
@@ -402,7 +402,7 @@ with DAG(
         
         endpoints_to_try = [
             'http://memoire_5455b9-minio-1:9000',
-            'http://172.18.0.3:9000'
+            'http://172.18.0.2:9000'
         ]
         s3_client = None
         for endpoint in endpoints_to_try:
@@ -445,7 +445,7 @@ with DAG(
         
         minio_urls = [
             'memoire_5455b9-minio-1:9000',
-            'http://172.18.0.3:9000'
+            'http://172.18.0.2:9000'
         ]
         s3_client = None
         for endpoint in minio_urls:
@@ -498,7 +498,7 @@ with DAG(
         import os
         
         # Chemin vers la base de données SQLite
-        db_path = '/usr/local/airflow/immobilier.db'
+        db_path = '/usr/local/airflow/data/immobilier.db'
         
         # Chemin vers les données jointes
         file_path = '/tmp/joined_cleaned_data_single'
@@ -519,8 +519,13 @@ with DAG(
             logging.info(f"✅ Data read from {file_path}, shape: {df.shape}")
             
             # Connexion à SQLite
-            conn = sqlite3.connect(db_path)
-            cursor = conn.cursor()
+            try:
+                conn = sqlite3.connect(db_path)
+                logging.info(f"🔗 Connected to SQLite database at {db_path}")
+                cursor = conn.cursor()
+            except Exception as e:
+                logging.error(f"❌ Error connecting to SQLite: {e}")
+                return False
             
             # Créer la table 'realestate' avec le bon schéma
             cursor.execute("""
