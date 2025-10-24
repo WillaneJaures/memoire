@@ -34,7 +34,7 @@ with DAG(
         import time
 
         df = pd.DataFrame()
-        for i in range(1, 5):  
+        for i in range(1, 400):  
             url = f'https://sn.coinafrique.com/categorie/immobilier?page={i}'
             logging.info(f"🔎 Scraping page {i}: {url}")
             res = get(url)
@@ -104,7 +104,7 @@ with DAG(
         class ExpatDakarSpider(scrapy.Spider):
             name = "expat_dakar"
             allowed_domains = ["expat-dakar.com"]
-            start_urls = [f"https://www.expat-dakar.com/appartements-a-louer?page={i}" for i in range(1, 10)]
+            start_urls = [f"https://www.expat-dakar.com/appartements-a-louer?page={i}" for i in range(1, 144)]
             handle_httpstatus_list = [403, 429]
             custom_settings = {
                 'LOG_ENABLED': False,
@@ -207,7 +207,7 @@ with DAG(
         # Essayer différentes méthodes de connexion
         endpoints_to_try = [
             'http://memoire_5455b9-minio-1:9000',
-            'http://172.18.0.2:9000'
+            'http://172.18.0.3:9000'
                    
         ]
         
@@ -335,7 +335,7 @@ with DAG(
 
         minio_urls = [
             'memoire_5455b9-minio-1:9000',
-            'http://172.18.0.2:9000'
+            'http://172.18.0.3:9000'
             
         ]
         
@@ -402,7 +402,7 @@ with DAG(
         
         endpoints_to_try = [
             'http://memoire_5455b9-minio-1:9000',
-            'http://172.18.0.2:9000'
+            'http://172.18.0.3:9000'
         ]
         s3_client = None
         for endpoint in endpoints_to_try:
@@ -445,7 +445,7 @@ with DAG(
         
         minio_urls = [
             'memoire_5455b9-minio-1:9000',
-            'http://172.18.0.2:9000'
+            'http://172.18.0.3:9000'
         ]
         s3_client = None
         for endpoint in minio_urls:
