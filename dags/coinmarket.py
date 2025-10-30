@@ -17,8 +17,8 @@ default_args = {
 # ----------------- DAG Definition -----------------
 with DAG(
     dag_id='coindakaretl',
-    start_date=datetime(2025, 7, 22),
-    schedule='@hourly',
+    start_date=datetime(2025, 10, 25),
+    schedule='@Weekly',
     catchup=False,
     default_args=default_args,
     description="ETL DAG to scrape data from CoinAfrique"
@@ -207,7 +207,7 @@ with DAG(
         # Essayer différentes méthodes de connexion
         endpoints_to_try = [
             'http://memoire_5455b9-minio-1:9000',
-            'http://172.18.0.3:9000'
+            'http://172.18.0.2:9000'
                    
         ]
         
@@ -335,7 +335,7 @@ with DAG(
 
         minio_urls = [
             'memoire_5455b9-minio-1:9000',
-            'http://172.18.0.3:9000'
+            'http://172.18.0.2:9000'
             
         ]
         
@@ -402,7 +402,7 @@ with DAG(
         
         endpoints_to_try = [
             'http://memoire_5455b9-minio-1:9000',
-            'http://172.18.0.3:9000'
+            'http://172.18.0.2:9000'
         ]
         s3_client = None
         for endpoint in endpoints_to_try:
@@ -445,7 +445,7 @@ with DAG(
         
         minio_urls = [
             'memoire_5455b9-minio-1:9000',
-            'http://172.18.0.3:9000'
+            'http://172.18.0.2:9000'
         ]
         s3_client = None
         for endpoint in minio_urls:
@@ -592,6 +592,192 @@ with DAG(
         except Exception as e:
             logging.error(f"❌ Error uploading to SQLite: {e}")
             return False
+    
+    
+
+    @task
+    def train_model_after_etl():
+        """
+        Entraîne automatiquement le modèle ML juste après la fin de l'ETL
+        (upload_join_to_sqlite). Sauvegarde le modèle et les objets preprocessing.
+        """
+        import pandas as pd
+        import numpy as np
+        import sqlite3
+        import joblib
+        import os
+        from sklearn.model_selection import train_test_split, cross_val_score
+        from sklearn.preprocessing import StandardScaler, OneHotEncoder
+        from sklearn.ensemble import GradientBoostingRegressor
+        from sklearn.metrics import r2_score, mean_absolute_error, mean_squared_error
+        from datetime import datetime
+
+        logging.info("🚀 Début de l'entraînement du modèle ML")
+
+        db_path = '/usr/local/airflow/data/immobilier.db'
+        if not os.path.exists(db_path):
+            raise FileNotFoundError(f" Base SQLite introuvable : {db_path}")
+
+        # Chargement des données
+        conn = sqlite3.connect(db_path)
+        df = pd.read_sql("SELECT * FROM realestate", conn)
+        conn.close()
+
+        if df.empty:
+            raise ValueError(" Aucune donnée trouvée pour l'entraînement du modèle")
+
+        # Préparation des données
+        # Supprimer colonnes inutiles
+        df = df.drop(columns=['id', 'source'], errors='ignore')
+
+        # Supprimer doublons
+        df = df.drop_duplicates()
+
+        # Uniformiser noms de colonnes
+        df.columns = df.columns.str.lower().str.replace(' ', '_')
+
+        # Supprimer valeurs aberrantes dans type
+        df = df[~df['type'].isin(['Unknown', 'Immobilier', 'unknown', 'immobilier'])]
+
+        # Uniformiser valeurs catégorielles
+        strings = list(df.dtypes[df.dtypes == 'object'].index)
+        for col in strings:
+            df[col] = df[col].str.lower().str.replace(' ', '_')
+
+        # Renommer valeurs
+        df['type'] = df['type'].replace({
+            'appartement': 'appartements',
+            'villa': 'villas',
+        })
+        df['category'] = df['category'].replace({
+            'locations': 'Locations'})
+
+        median_superficie = df['superficie'].median()
+        df.loc[df['superficie'] < 20, 'superficie'] = median_superficie
+
+        # Traiter outliers avec IQR
+        features = ['price', 'superficie', 'nombre_chambres', 'nombre_sdb']
+
+        def impute_outliers(df, feature):
+            q1 = np.percentile(df[feature], 25)
+            q3 = np.percentile(df[feature], 75) 
+            iqr = q3 - q1
+            lower_bound = q1 - 1.5 * iqr
+            upper_bound = q3 + 1.5 * iqr
+            
+            df.loc[df[feature] < lower_bound, feature] = lower_bound
+            df.loc[df[feature] > upper_bound, feature] = upper_bound
+
+        for feature in features:
+            impute_outliers(df, feature)
+        
+        # Créer nouvelles features (sans utiliser la cible)
+        df['ratio_sdb_chambres'] = df['nombre_sdb'] / (df['nombre_chambres'] + 1)
+        df['surface_par_chambre'] = df['superficie'] / (df['nombre_chambres'] + 1)
+
+        # Log transform pour les distributions asymétriques
+        df['log_price'] = np.log1p(df['price'])
+        df['log_superficie'] = np.log1p(df['superficie'])
+
+        # ============================
+        # ENCODAGE ONEHOT
+        # ============================
+
+        categorical_cols = ['type', 'category', 'area', 'city']
+        numerical_cols = ['superficie', 'nombre_chambres', 'nombre_sdb', 
+                        'ratio_sdb_chambres', 'surface_par_chambre',
+                        'log_superficie']
+
+        X_num = df[numerical_cols]
+        X_cat = df[categorical_cols]
+
+        # OneHotEncoder
+        encoder = OneHotEncoder(sparse_output=False, drop='first', handle_unknown='ignore')
+        X_cat_encoded = encoder.fit_transform(X_cat)
+        feature_names = encoder.get_feature_names_out(categorical_cols)
+
+        X_cat_df = pd.DataFrame(X_cat_encoded, columns=feature_names, index=df.index)
+        X = pd.concat([X_num.reset_index(drop=True), X_cat_df.reset_index(drop=True)], axis=1)
+        y = df['price'].reset_index(drop=True)  # Garder y non normalisé
+        
+        preprocessing_info = {
+            'numerical_cols': numerical_cols,
+            'categorical_cols': categorical_cols,
+            'feature_names': feature_names.tolist(),
+            'all_columns': X.columns.tolist()
+        }
+
+
+        # ============================
+        # SPLIT TRAIN/TEST
+        # ============================
+
+        X_train, X_test, y_train, y_test = train_test_split(
+            X, y, test_size=0.2, random_state=42, stratify=df['category'].reset_index(drop=True)
+        )
+
+
+        model = GradientBoostingRegressor(
+            n_estimators=300,       
+            max_depth=4,           
+            learning_rate=0.05,      
+            subsample=0.8,           
+            min_samples_split=20,
+            min_samples_leaf=10,
+            random_state=42
+        )
+        
+        model.fit(X_train, y_train)
+        
+        y_train_pred = model.predict(X_train)
+        y_test_pred = model.predict(X_test)
+        
+        train_r2 = r2_score(y_train, y_train_pred)
+        test_r2 = r2_score(y_test, y_test_pred)
+        test_mae = mean_absolute_error(y_test, y_test_pred)
+        test_rmse = np.sqrt(mean_squared_error(y_test, y_test_pred))
+
+
+
+        
+        cv_scores = cross_val_score(model, X_train, y_train, cv=5, scoring='r2')
+
+
+        metrics = {
+            'train_r2': float(train_r2),
+            'test_r2': float(test_r2),
+            'test_mae': float(test_mae),
+            'test_rmse' : float(test_rmse),
+            'overfitting': float(train_r2 - test_r2),
+            'timestamp': datetime.now().isoformat()
+
+        }
+        # Sauvegarde du modèle
+        models_dir = '/usr/local/airflow/data/models'
+        os.makedirs(models_dir, exist_ok=True)
+        joblib.dump(model, f'{models_dir}/best_model.pkl')
+        joblib.dump(metrics, f'{models_dir}/metrics.pkl')
+        joblib.dump(encoder, f'{models_dir}/encoder.pkl')
+        joblib.dump(preprocessing_info, f'{models_dir}/preprocessing_info.pkl')
+        #joblib.dump(scaler, f'{models_dir}/scaler.pkl')
+        
+
+        logging.info(f" Entraînement terminé — Train R²={train_r2:.4f}")
+        logging.info(f"MAE={test_mae:,.0f}")
+        logging.info(f"RMSE={test_rmse:,.0f}")
+        logging.info(f" Modèles sauvegardés dans {models_dir}")
+        logging.info(f" Entraînement exécuté à {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+
+        # Convertir cv_scores (numpy array) en liste Python pour la sérialisation
+        return {
+            'train_r2': train_r2,
+            'test_r2': test_r2, 
+            'mae': test_mae, 
+            'rmse': test_rmse, 
+            'cross_val': cv_scores.tolist(), 
+            'cross_val_mean': float(cv_scores.mean()),  
+            'cross_val_std': float(cv_scores.std())      
+        }
 
     # ----------------- Orchestration (instantiate tasks and set dependencies) -----------------
     # Phase 1 : Scraping des deux sources en parallèle
@@ -635,5 +821,6 @@ with DAG(
     # Phase 7 : Upload de la jointure sur SQLite
     upload_join_sqlite = upload_join_to_sqlite()
     
+    train_model_task = train_model_after_etl()
     # L'upload SQLite attend la jointure
-    join_job >> upload_join_sqlite
+    join_job >> upload_join_sqlite >> train_model_task

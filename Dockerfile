@@ -5,8 +5,13 @@ FROM astrocrpublic.azurecr.io/runtime:3.0-4
 # Installe Java et Spark
 USER root
 
-# Installer Java et Spark
-RUN apt-get update && apt-get install -y openjdk-17-jdk wget curl unzip && \
+# Installer Java, Spark et dépendances système
+RUN apt-get update && apt-get install -y \
+    openjdk-17-jdk \
+    wget \
+    curl \
+    unzip \
+    libgomp1 && \
     wget https://archive.apache.org/dist/spark/spark-3.5.1/spark-3.5.1-bin-hadoop3.tgz && \
     tar -xvzf spark-3.5.1-bin-hadoop3.tgz -C /opt/ && \
     ln -s /opt/spark-3.5.1-bin-hadoop3 /opt/spark && \

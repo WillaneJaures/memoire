@@ -78,18 +78,21 @@ df5 = fillna_mean(df4, {"Price", "nombre_chambres", "nombre_sdb", "superficie"})
 # ============================
 df6 = df5.withColumn(
     "category",
-    when(col("Price").cast("int") >= 5000000, "vente").otherwise("location")
+    when(col("Price").cast("int") >= 5000000, "Vente").otherwise("Location")
 )
 
 df7 = df6.withColumn(
     "type",
-    when(col("nombre_chambres").cast("int") >= 4, "villa").otherwise("appartement")
+    when(col("nombre_chambres").cast("int") >= 4, "Villas").otherwise("Appartements")
 )
+
+df_ = df7.withColumn("type", regexp_replace(col("Type"), "appartements", "Appartements"))
+df__ = df_.withColumn("type", regexp_replace(col("Type"), "villas", "Villas"))
 
 # ============================
 # 7️⃣  CAST FINAL ET NORMALISATION
 # ============================
-df8 = df7.withColumn("Price", col("Price").cast("int")) \
+df8 = df__.withColumn("Price", col("Price").cast("int")) \
     .withColumn("nombre_chambres", col("nombre_chambres").cast("int")) \
     .withColumn("nombre_sdb", col("nombre_sdb").cast("int")) \
     .withColumn("superficie", col("superficie").cast("int"))

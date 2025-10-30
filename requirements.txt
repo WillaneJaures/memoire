@@ -12,3 +12,9 @@ pandas
 scrapy
 selenium
 SQLAlchemy
+scikit-learn
+lightgbm
+optuna
+plotly
+lightgbm
+joblib

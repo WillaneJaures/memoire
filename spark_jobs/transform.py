@@ -68,6 +68,7 @@ df4 = df3.withColumn(
     trim(regexp_replace(col("Superficie"), "m2", ""))
 )
 
+
 # ============================
 # 5️⃣  GESTION DU PRIX
 # ============================
@@ -127,7 +128,14 @@ df13 = df12.withColumn("category", regexp_replace(col("category"), "(?i)location
 df14 = df13.withColumn("category", regexp_replace(col("category"), "Locaton|Location/", "Location"))
 df15 = df14.withColumn("category", regexp_replace(col("category"), "Terrain|Six|Parcelle|100", "Vente"))
 
-df16 = df15.withColumn(
+#===========================
+#narmalisation type
+#===========================
+
+df_ = df15.withColumn("type", regexp_replace(col("Type"), "appartements", "Appartements"))
+df__ = df_.withColumn("type", regexp_replace(col("Type"), "villas", "Villas"))
+
+df16 = df__.withColumn(
     "category",
     when((col("category") == "Location") | (col("category") == "Vente"), col("category"))
     .otherwise("Vente")

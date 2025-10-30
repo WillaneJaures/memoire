@@ -1,5 +1,5 @@
 from pyspark.sql import SparkSession
-from pyspark.sql.functions import col, lit
+from pyspark.sql.functions import col, lit, when, lower
 import os
 import sys
 
@@ -12,7 +12,7 @@ def resolve_single_csv_path(directory_path: str) -> str:
     if os.path.isdir(directory_path):
         csv_files = [f for f in os.listdir(directory_path) if f.endswith('.csv')]
         if not csv_files:
-            print(f"❌ No CSV files found in directory: {directory_path}")
+            print(f" No CSV files found in directory: {directory_path}")
             spark.stop()
             sys.exit(1)
         return os.path.join(directory_path, csv_files[0])
@@ -29,7 +29,6 @@ print(f"Coinmarket cleaned CSV: {coinmarket_csv}")
 print(f"ExpatDakar cleaned CSV: {expat_csv}")
 
 df_coin = spark.read.csv(coinmarket_csv, header=True, inferSchema=True)
-
 df_expat = spark.read.csv(expat_csv, header=True, inferSchema=True)
 
 # Standardize schemas
@@ -45,7 +44,7 @@ df_expat_std = df_expat \
     .withColumn("city", col("region")) \
     .withColumn("source", lit("expatdakar"))
 
-# Ensure required columns exist on both (allowMissingColumns=True in union)
+# Ensure required columns exist on both
 required_columns = [
     "price", "type", "superficie", "nombre_chambres", "nombre_sdb",
     "category", "area", "city", "source"
@@ -60,20 +59,53 @@ for c in required_columns:
 df_coin_std = df_coin_std.select(required_columns)
 df_expat_std = df_expat_std.select(required_columns)
 
+# Union des deux datasets
 df_joined = df_coin_std.unionByName(df_expat_std, allowMissingColumns=True)
 
-print("✅ Preview of joined dataset:")
+print("Preview avant nettoyage supplémentaire:")
 df_joined.show(20, truncate=False)
 
+# ========== NETTOYAGES SUPPLÉMENTAIRES ==========
+
+# 1. Supprimer les valeurs aberrantes dans 'type'
+values_to_remove = ['Unknown', 'Immobilier', 'unknown', 'immobilier']
+df_cleaned = df_joined.filter(~lower(col("type")).isin([v.lower() for v in values_to_remove]))
+
+# 2. Renommer les valeurs dans 'type'
+df_cleaned = df_cleaned.withColumn(
+    "type",
+    when(lower(col("type")) == "appartement", "appartements")
+    .when(lower(col("type")) == "villa", "villas")
+    .otherwise(col("type"))
+)
+
+# 3. Remplacer les superficies < 20 par la médiane
+# Calculer la médiane avec approxQuantile
+median_superficie = df_cleaned.approxQuantile("superficie", [0.5], 0.01)[0]
+print(f"Médiane de superficie: {median_superficie}")
+
+df_cleaned = df_cleaned.withColumn(
+    "superficie",
+    when(col("superficie") < 20, median_superficie)
+    .otherwise(col("superficie"))
+)
+
+print(" Preview après nettoyage supplémentaire:")
+df_cleaned.show(20, truncate=False)
+
+# Statistiques
+print(f"Nombre total de lignes après nettoyage: {df_cleaned.count()}")
+print(f"Répartition par type:")
+df_cleaned.groupBy("type").count().show()
+
+# Sauvegarder les résultats
 output_dir = "/tmp/joined_cleaned_data"
 output_single = "/tmp/joined_cleaned_data_single"
 
-df_joined.write.mode("overwrite").csv(output_dir, header=True)
-df_joined.coalesce(1).write.mode("overwrite").option("header", True).csv(output_single)
+df_cleaned.write.mode("overwrite").csv(output_dir, header=True)
+df_cleaned.coalesce(1).write.mode("overwrite").option("header", True).csv(output_single)
 
-print(f"✅ Joined dataset saved to: {output_dir}")
-print(f"✅ Single CSV for joined dataset saved to: {output_single}")
+print(f" Joined dataset saved to: {output_dir}")
+print(f" Single CSV for joined dataset saved to: {output_single}")
 
 spark.stop()
-
-
